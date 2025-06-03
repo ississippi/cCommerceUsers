@@ -1,7 +1,10 @@
 ﻿using System;
+using System.Drawing.Printing;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace eCommerceUsers.Models
 {
@@ -34,15 +37,10 @@ namespace eCommerceUsers.Models
             group.MapGet("/", async (UsersDbContext db, int page = 1, int pageSize = 10) =>
             {
                 // Validate pagination parameters
-                if (page < 1) page = 1;
-                if (pageSize < 1) pageSize = 10;
-                if (pageSize > 100) pageSize = 100; // Limit max page size
+                ValidatePagination(ref page, ref pageSize);
 
                 // Get total count
                 var totalUsers = await db.Users.CountAsync();
-                
-                // Calculate pagination info
-                var totalPages = (int)Math.Ceiling((double)totalUsers / pageSize);
                 var skip = (page - 1) * pageSize;
 
                 // Get paginated data
@@ -55,15 +53,7 @@ namespace eCommerceUsers.Models
                 var response = new
                 {
                     Data = users,
-                    Pagination = new
-                    {
-                        CurrentPage = page,
-                        PageSize = pageSize,
-                        TotalUsers = totalUsers,
-                        TotalPages = totalPages,
-                        HasNext = page < totalPages,
-                        HasPrevious = page > 1
-                    }
+                    Pagination = GetPagination(page, pageSize, totalUsers)
                 };
                 return Results.Ok(response);
             })
@@ -83,6 +73,35 @@ namespace eCommerceUsers.Models
                 return Results.Ok(user);
             })
             .WithName("GetUserById")
+            .WithOpenApi();
+
+            group.MapGet("/by-last-name/{last_name}", async (UsersDbContext db, string last_name, int page = 1, int pageSize = 10) =>
+            {
+                ValidatePagination(ref page, ref pageSize);
+                var skip = (page - 1) * pageSize;
+
+                var totalUsers = await db.Users.CountAsync(u => u.last_name == last_name);
+
+                var users = await db.Users
+                    .Where(u => u.last_name == last_name)
+                    .OrderBy(u => u.id)
+                    .Skip(skip)
+                    .Take(pageSize)
+                    .ToListAsync();
+
+                if (users == null)
+                {
+                    return Results.NotFound($"Users with Last Name {last_name} for page {page} not found");
+                }
+                var response = new
+                {
+                    Data = users,
+                    Pagination = GetPagination(page, pageSize, totalUsers)
+                };
+                return Results.Ok(response);
+
+            })
+            .WithName("GetUsersByLastName")
             .WithOpenApi();
 
             // POST /api/User - Create new user
@@ -192,6 +211,29 @@ namespace eCommerceUsers.Models
             })
             .WithName("GetUserCount")
             .WithOpenApi();
+        }
+        private static void ValidatePagination(ref int page, ref int pageSize)
+        {
+            // Validate pagination parameters
+            if (page < 1) page = 1;
+            if (pageSize < 1) pageSize = 10;
+            if (pageSize > 100) pageSize = 100; // Limit max page size
+        }
+        private static object GetPagination(int page, int pageSize, int totalUsers)
+        {
+            // Calculate pagination info
+            var totalPages = (int)Math.Ceiling((double)totalUsers / pageSize);
+
+            return new
+            {
+                CurrentPage = page,
+                PageSize = pageSize,
+                TotalUsers = totalUsers,
+                TotalPages = totalPages,
+                HasNext = page < totalPages,
+                HasPrevious = page > 1
+            };
+
         }
     }
 }
